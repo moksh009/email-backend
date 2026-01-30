@@ -65,12 +65,12 @@ const getTransporter = async (senderId) => {
 
     let transporterConfig;
     const commonOptions = {
-      connectionTimeout: 60000, // 60 seconds
+      connectionTimeout: 20000, // 20 seconds
       greetingTimeout: 30000,   // 30 seconds
-      socketTimeout: 60000,     // 60 seconds
+      socketTimeout: 20000,     // 20 seconds
       pool: true,               // Use pooled connections
-      maxConnections: 3,        // Limit connections per sender to avoid blocking
-      maxMessages: 50,          // Refresh connection after 50 messages
+      maxConnections: 1,        // Reduce from 3 to 1 to stay under the radar
+      maxMessages: 100,         // Refresh connection after 100 messages
       logger: true,             // Log to console
       debug: true               // Include SMTP traffic in logs
     };
@@ -102,10 +102,11 @@ const getTransporter = async (senderId) => {
       };
     } else {
       // Default to Hostinger if no overrides and not gmail-like
+      // Fallback to Port 587 (STARTTLS) as Port 465 might be blocked by some cloud providers
       transporterConfig = {
         host: 'smtp.hostinger.com',
-        port: 465, // Try 465 SSL first for Hostinger too
-        secure: true,
+        port: 587,
+        secure: false,
         auth: { user, pass },
         tls: {
           rejectUnauthorized: false
@@ -140,14 +141,13 @@ const getTransporter = async (senderId) => {
     const transporter = nodemailer.createTransport(transporterConfig);
 
     // Verify the connection with timeout to avoid hangs
-    // For Gmail/Workspace, verification is often rate-limited or blocked if done too aggressively
-    // We will SKIP verification for Gmail/Workspace to avoid startup errors
-    if (!isGmailAddress && !forceGmail) {
-        await Promise.race([
-          transporter.verify(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 20000))
-        ]);
-    }
+    // We NEED to verify the connection at startup to see if the port is blocked.
+    // Use a race condition to fail fast if the host is blocking the port.
+    await Promise.race([
+      transporter.verify(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`Connection timeout: Port ${transporterConfig.port} might be blocked by your hosting provider (Render/AWS)`)), 10000))
+    ]);
+
     transporters[senderId] = transporter;
     return transporter;
   } catch (error) {
