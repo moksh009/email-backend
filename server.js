@@ -50,19 +50,37 @@ console.log("-----------------");
 
 // Helper to choose AI provider
 const generateEmail = async (prompt, provider) => {
-    // Explicit choice
+    // 1. Explicit Choice
     if (provider === 'groq') {
         if (!process.env.GROQ_API_KEY) throw new Error("Groq API Key not configured");
         return await groqService.generateEmail(prompt);
     }
+    
     if (provider === 'gemini') {
-        return await geminiService.generateEmail(prompt);
+        try {
+            return await geminiService.generateEmail(prompt);
+        } catch (error) {
+            // Fallback to Groq if Gemini fails explicitly
+            console.warn("Gemini failed, falling back to Groq...", error.message);
+            if (process.env.GROQ_API_KEY) {
+                return await groqService.generateEmail(prompt);
+            }
+            throw error;
+        }
     }
 
-    // Default fallback logic (if no provider specified)
+    // 2. Default Auto-Selection (Prefer Groq for speed, Gemini for backup)
     if (process.env.GROQ_API_KEY) {
-        return await groqService.generateEmail(prompt);
+        try {
+            return await groqService.generateEmail(prompt);
+        } catch (error) {
+            console.warn("Groq failed, falling back to Gemini...", error.message);
+            // Fallback to Gemini
+            return await geminiService.generateEmail(prompt);
+        }
     }
+    
+    // Only Gemini available
     return await geminiService.generateEmail(prompt);
 };
 
