@@ -4,7 +4,12 @@ console.log("express loaded");
 const cors = require('cors');
 const multer = require('multer');
 console.log("middleware loaded");
-const dns = require('dns').promises;
+const dns = require('dns');
+// Force IPv4 to avoid IPv6 connection timeouts in some cloud environments (like Render/AWS)
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 const net = require('net');
 const fs = require('fs');
 const path = require('path');

@@ -64,10 +64,17 @@ const getTransporter = async (senderId) => {
     const forceGmail = (process.env[`USE_GMAIL_${senderId}`] || '').toLowerCase() === 'true'; // for Google Workspace
 
     let transporterConfig;
+    const commonOptions = {
+      connectionTimeout: 30000, // 30 seconds
+      greetingTimeout: 30000,   // 30 seconds
+      socketTimeout: 30000      // 30 seconds
+    };
+
     if (explicitService) {
       transporterConfig = {
         service: explicitService,
-        auth: { user, pass }
+        auth: { user, pass },
+        ...commonOptions
       };
     } else if (explicitHost) {
       transporterConfig = {
@@ -75,7 +82,8 @@ const getTransporter = async (senderId) => {
         port: explicitPort ? Number(explicitPort) : 587,
         secure: explicitSecure ? explicitSecure.toLowerCase() === 'true' : false,
         auth: { user, pass },
-        tls: { rejectUnauthorized: false }
+        tls: { rejectUnauthorized: false },
+        ...commonOptions
       };
     } else if (isGmailAddress || forceGmail) {
       // Gmail / Google Workspace
@@ -83,7 +91,8 @@ const getTransporter = async (senderId) => {
         host: 'smtp.gmail.com',
         port: 587,
         secure: false, // STARTTLS
-        auth: { user, pass }
+        auth: { user, pass },
+        ...commonOptions
       };
     } else {
       // Default to Hostinger if no overrides and not gmail-like
@@ -94,7 +103,8 @@ const getTransporter = async (senderId) => {
         auth: { user, pass },
         tls: {
           rejectUnauthorized: false
-        }
+        },
+        ...commonOptions
       };
     }
 
@@ -129,7 +139,7 @@ const getTransporter = async (senderId) => {
     if (!isGmailAddress && !forceGmail) {
         await Promise.race([
           transporter.verify(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 8000))
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 20000))
         ]);
     }
     transporters[senderId] = transporter;
