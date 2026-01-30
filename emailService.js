@@ -65,9 +65,14 @@ const getTransporter = async (senderId) => {
 
     let transporterConfig;
     const commonOptions = {
-      connectionTimeout: 30000, // 30 seconds
+      connectionTimeout: 60000, // 60 seconds
       greetingTimeout: 30000,   // 30 seconds
-      socketTimeout: 30000      // 30 seconds
+      socketTimeout: 60000,     // 60 seconds
+      pool: true,               // Use pooled connections
+      maxConnections: 3,        // Limit connections per sender to avoid blocking
+      maxMessages: 50,          // Refresh connection after 50 messages
+      logger: true,             // Log to console
+      debug: true               // Include SMTP traffic in logs
     };
 
     if (explicitService) {
@@ -87,10 +92,11 @@ const getTransporter = async (senderId) => {
       };
     } else if (isGmailAddress || forceGmail) {
       // Gmail / Google Workspace
+      // Use Port 465 (SSL) which is often more reliable on Cloud Hosting than 587
       transporterConfig = {
         host: 'smtp.gmail.com',
-        port: 587,
-        secure: false, // STARTTLS
+        port: 465,
+        secure: true, // SSL
         auth: { user, pass },
         ...commonOptions
       };
@@ -98,8 +104,8 @@ const getTransporter = async (senderId) => {
       // Default to Hostinger if no overrides and not gmail-like
       transporterConfig = {
         host: 'smtp.hostinger.com',
-        port: 587,
-        secure: false,
+        port: 465, // Try 465 SSL first for Hostinger too
+        secure: true,
         auth: { user, pass },
         tls: {
           rejectUnauthorized: false
