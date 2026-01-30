@@ -41,6 +41,10 @@ const geminiService = require('./geminiService');
 const groqService = require('./groqService');
 const { generateEmailPrompt, generateFollowUpPrompt } = require('./prompts');
 const campaignManager = require('./campaignManager');
+const { initScheduler } = require('./schedulerService');
+
+// Start the scheduler
+initScheduler();
 
 // Debug Env Vars (Masked)
 console.log("--- ENV DEBUG ---");
@@ -259,6 +263,9 @@ app.post('/api/send-email', upload.array('attachments'), async (req, res) => {
       }
     }
 
+    // Extract follow-up data if present
+    const { followUpSubject, followUpContent } = req.body;
+
     // Send email using configured service
     const result = await sendEmail({
       to: recipients,
@@ -280,7 +287,15 @@ app.post('/api/send-email', upload.array('attachments'), async (req, res) => {
         status: 'sent',
         results: result.results, // Contains Message-IDs
         originalMessageId: req.body.replyToMessageId || (result.results[0] ? result.results[0].messageId : null),
-        isFollowUp: !!req.body.replyToMessageId
+        isFollowUp: !!req.body.replyToMessageId,
+        
+        // Follow-up Configuration
+        followUp: followUpContent ? {
+            subject: followUpSubject || `Re: ${subject}`,
+            content: followUpContent
+        } : null,
+        followUpStatus: followUpContent ? 'pending' : 'none',
+        followUpScheduledAt: followUpContent ? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString() : null
     };
     campaignManager.saveCampaign(campaignData);
 

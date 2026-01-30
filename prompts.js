@@ -80,9 +80,21 @@ X missed inquiries per week
 
 OUTPUT REQUIREMENTS
 
-Write ONE cold email.
+Write ONE cold email AND a follow-up email.
 
-STRUCTURE TO FOLLOW EXACTLY
+RETURN JSON FORMAT ONLY:
+{
+  "initial": {
+    "subject": "...",
+    "content": "..."
+  },
+  "followUp": {
+    "subject": "...",
+    "content": "..."
+  }
+}
+
+STRUCTURE TO FOLLOW EXACTLY FOR INITIAL EMAIL
 
 OPENING — OPERATIONAL MIRROR
 
