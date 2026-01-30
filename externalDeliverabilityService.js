@@ -2,21 +2,36 @@ const GlockAppsService = require('./services/glockAppsService');
 const PersonalSeedService = require('./services/personalSeedService');
 const { checkDomainSecurity } = require('./dnsChecker');
 const { sendEmail } = require('./emailService');
-const fs = require('fs');
-const path = require('path');
+const supabase = require('./supabaseClient');
 
-// Store API keys in a simple JSON file for now (in production, use encrypted DB)
-const CONFIG_FILE = path.join(__dirname, 'services_config.json');
-
-function loadConfig() {
+// Helper to get config from Supabase
+async function getConfig(serviceName) {
     try {
-        if (!fs.existsSync(CONFIG_FILE)) return {};
-        return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-    } catch (e) { return {}; }
+        const { data, error } = await supabase
+            .from('service_configs')
+            .select('config')
+            .eq('service_name', serviceName)
+            .single();
+        
+        if (error || !data) return {};
+        return data.config || {};
+    } catch (e) {
+        console.error(`Supabase getConfig(${serviceName}) exception:`, e);
+        return {};
+    }
 }
 
-function saveConfig(config) {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+// Helper to save config to Supabase
+async function saveConfig(serviceName, config) {
+    try {
+        const { error } = await supabase.from('service_configs').upsert({
+            service_name: serviceName,
+            config: config
+        });
+        if (error) console.error(`Supabase saveConfig(${serviceName}) error:`, error);
+    } catch (e) {
+        console.error(`Supabase saveConfig(${serviceName}) exception:`, e);
+    }
 }
 
 // Map of provider names to their service classes
@@ -30,15 +45,15 @@ class ExternalDeliverabilityManager {
         this.activeTests = new Map();
     }
 
-    getService(providerName) {
-        const config = loadConfig();
+    async getService(providerName) {
+        const config = await getConfig(providerName);
         
         if (providerName === 'personal') {
-            const seeds = config['personal']?.seeds || [];
+            const seeds = config.seeds || [];
             return new PersonalSeedService(seeds);
         }
 
-        const apiKey = config[providerName]?.apiKey;
+        const apiKey = config.apiKey;
         const ServiceClass = PROVIDERS[providerName];
         if (!ServiceClass) throw new Error(`Provider ${providerName} not supported`);
         
@@ -50,13 +65,13 @@ class ExternalDeliverabilityManager {
      * Returns a seed list to send to.
      */
     async startTest(providerName) {
-        const service = this.getService(providerName);
+        const service = await this.getService(providerName);
         // This calls the external API to get the seed list
         const { testId, seedList } = await service.createTest();
         
         // Store test info for personal checks
         if (providerName === 'personal') {
-             this.activeTests.set(testId, { provider: 'personal', startTime: Date.now() });
+            this.activeTests.set(testId, { provider: 'personal', startTime: Date.now() });
         }
 
         return { testId, seedList };
@@ -98,36 +113,36 @@ class ExternalDeliverabilityManager {
      * Step 3: Fetch results from the provider
      */
     async getTestStatus(providerName, testId, subject = null) {
-        const service = this.getService(providerName);
-        
+        const service = await this.getService(providerName);
+        // For personal service, we might need to pass the subject to search IMAP
         if (providerName === 'personal') {
-            if (!subject) throw new Error('Subject required to check personal seeds');
-            return await service.getTestResults(testId, subject);
+             return await service.getTestResults(testId, subject);
         }
-
         return await service.getTestResults(testId);
     }
 
-    saveApiKey(providerName, apiKey) {
-        const config = loadConfig();
-        config[providerName] = { apiKey };
-        saveConfig(config);
-    }
-    
-    savePersonalSeeds(seeds) {
-        const config = loadConfig();
-        config['personal'] = { seeds };
-        saveConfig(config);
+    // --- Configuration Management ---
+
+    async getApiKey(providerName) {
+        const config = await getConfig(providerName);
+        return config.apiKey;
     }
 
-    getApiKey(providerName) {
-         const config = loadConfig();
-         return config[providerName]?.apiKey || null;
+    async saveApiKey(providerName, apiKey) {
+        const config = await getConfig(providerName);
+        config.apiKey = apiKey;
+        await saveConfig(providerName, config);
     }
 
-    getPersonalSeeds() {
-        const config = loadConfig();
-        return config['personal']?.seeds || [];
+    async getPersonalSeeds() {
+        const config = await getConfig('personal');
+        return config.seeds || [];
+    }
+
+    async savePersonalSeeds(seeds) {
+        const config = await getConfig('personal');
+        config.seeds = seeds;
+        await saveConfig('personal', config);
     }
 }
 

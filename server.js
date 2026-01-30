@@ -1,49 +1,66 @@
+console.log("Starting server...");
 const express = require('express');
+console.log("express loaded");
 const cors = require('cors');
 const multer = require('multer');
+console.log("middleware loaded");
 const dns = require('dns').promises;
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+console.log("std libs loaded");
 require('dotenv').config();
+console.log("dotenv loaded");
 
 // Optional email service
+console.log("Loading emailService...");
 let emailService = {};
 try {
   emailService = require('./emailService');
+  console.log("emailService loaded.");
 } catch (e) {
-  console.warn('emailService not found – send endpoints disabled');
+  console.warn('emailService not found – send endpoints disabled', e);
 }
 
 const { sendEmail, scheduleEmail, getSendersList, initializeTransporters } = emailService;
 
 // Optional verification service
+console.log("Loading verificationService...");
 let verificationModule = {};
 try {
   verificationModule = require('./verificationService');
+  console.log("verificationService loaded.");
 } catch (e) {
-  console.warn('verificationService not found');
+  console.warn('verificationService not found', e);
 }
 
 // Stats manager (file-based)
+console.log("Loading statsManager...");
 const { recordSend, getStructuredStats } = require('./statsManager');
 const { checkDomainSecurity } = require('./dnsChecker');
+console.log("Loading deliverabilityService...");
 const { 
   checkQualification, 
   runDeliverabilityTest, 
   loadStats: loadDeliverabilityStats 
 } = require('./deliverabilityService');
 
+console.log("Loading externalDeliverabilityService...");
 const externalDeliverability = require('./externalDeliverabilityService');
 
 // Dynamic AI Service Selection
+console.log("Loading AI services...");
 const geminiService = require('./geminiService');
 const groqService = require('./groqService');
 const { generateEmailPrompt, generateFollowUpPrompt } = require('./prompts');
+console.log("Loading campaignManager...");
 const campaignManager = require('./campaignManager');
+console.log("Loading schedulerService...");
 const { initScheduler } = require('./schedulerService');
 
 // Start the scheduler
+console.log("Initializing scheduler...");
 initScheduler();
 
 // Debug Env Vars (Masked)
@@ -95,9 +112,7 @@ const app = express();
 ========================= */
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? (process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : '*') 
-    : ['http://localhost:5173', 'http://localhost:5174'],
+  origin: true, // Allow all origins for now to fix CORS issues
   credentials: true
 }));
 
@@ -114,25 +129,33 @@ const upload = multer({
 ========================= */
 
 // Get configured API key or Personal Seeds
-app.get('/api/deliverability/config/:provider', (req, res) => {
-    if (req.params.provider === 'personal') {
-        const seeds = externalDeliverability.getPersonalSeeds();
-        return res.json({ hasKey: seeds.length > 0, seeds });
+app.get('/api/deliverability/config/:provider', async (req, res) => {
+    try {
+        if (req.params.provider === 'personal') {
+            const seeds = await externalDeliverability.getPersonalSeeds();
+            return res.json({ hasKey: seeds.length > 0, seeds });
+        }
+        const key = await externalDeliverability.getApiKey(req.params.provider);
+        res.json({ hasKey: !!key });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-    const key = externalDeliverability.getApiKey(req.params.provider);
-    res.json({ hasKey: !!key });
 });
 
 // Save API key or Personal Seeds
-app.post('/api/deliverability/config/:provider', (req, res) => {
-    if (req.params.provider === 'personal') {
-        const { seeds } = req.body;
-        externalDeliverability.savePersonalSeeds(seeds);
-        return res.json({ success: true });
+app.post('/api/deliverability/config/:provider', async (req, res) => {
+    try {
+        if (req.params.provider === 'personal') {
+            const { seeds } = req.body;
+            await externalDeliverability.savePersonalSeeds(seeds);
+            return res.json({ success: true });
+        }
+        const { apiKey } = req.body;
+        await externalDeliverability.saveApiKey(req.params.provider, apiKey);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
-    const { apiKey } = req.body;
-    externalDeliverability.saveApiKey(req.params.provider, apiKey);
-    res.json({ success: true });
 });
 
 // Start a real-world test
@@ -278,7 +301,7 @@ app.post('/api/send-email', upload.array('attachments'), async (req, res) => {
 
     // Save to Campaign History
     const campaignData = {
-        id: Date.now().toString(), // Simple ID
+        id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         subject,
         content,
@@ -297,12 +320,12 @@ app.post('/api/send-email', upload.array('attachments'), async (req, res) => {
         followUpStatus: followUpContent ? 'pending' : 'none',
         followUpScheduledAt: followUpContent ? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString() : null
     };
-    campaignManager.saveCampaign(campaignData);
+    await campaignManager.saveCampaign(campaignData);
 
-    // Record stats for each sender (file-based)
-    senders.forEach(senderId => {
-      recordSend(senderId, recipients.length);
-    });
+    // Record stats for each sender (Supabase)
+    for (const senderId of senders) {
+      await recordSend(senderId, recipients.length);
+    }
 
     res.json(result);
   } catch (err) {
@@ -337,7 +360,7 @@ app.post('/api/schedule-email', upload.array('attachments'), async (req, res) =>
     })) || [];
 
     // Save initial campaign as 'scheduled'
-    const campaignId = Date.now().toString();
+    const campaignId = crypto.randomUUID();
     const campaignData = {
         id: campaignId,
         createdAt: new Date().toISOString(),
@@ -409,9 +432,10 @@ app.post('/api/verify-emails', async (req, res) => {
    STATS ENDPOINT
 ========================= */
 
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   try {
-    const structuredStats = getStructuredStats();
+    const senders = typeof getSendersList === 'function' ? getSendersList() : [];
+    const structuredStats = await getStructuredStats(senders);
     res.json(structuredStats);
   } catch (err) {
     console.error('Failed to get stats', err);
@@ -423,9 +447,9 @@ app.get('/api/stats', (req, res) => {
    DELIVERABILITY & QUALIFICATION
 ========================= */
 
-app.get('/api/deliverability/stats', (req, res) => {
+app.get('/api/deliverability/stats', async (req, res) => {
   try {
-    const stats = loadDeliverabilityStats();
+    const stats = await loadDeliverabilityStats();
     res.json(stats);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -483,8 +507,8 @@ app.post('/api/ai/generate', async (req, res) => {
    CAMPAIGN HISTORY & FOLLOW-UPS
 ========================= */
 
-app.get('/api/history', (req, res) => {
-    res.json(campaignManager.getCampaigns());
+app.get('/api/history', async (req, res) => {
+    res.json(await campaignManager.getCampaigns());
 });
 
 app.post('/api/ai/generate-followup', async (req, res) => {
@@ -492,7 +516,7 @@ app.post('/api/ai/generate-followup', async (req, res) => {
         const { originalEmailId, serviceType, provider } = req.body;
         
         // Find original email
-        const campaigns = campaignManager.getCampaigns();
+        const campaigns = await campaignManager.getCampaigns();
         const original = campaigns.find(c => c.id === originalEmailId);
         
         if (!original) {
